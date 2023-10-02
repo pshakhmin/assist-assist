@@ -38,12 +38,14 @@ def work_sheet(sheet, standings, contest):
         if student_name == 'Student':
             continue
 
-        student_login = str(sheet.cell(row, 2).value)
+        student_login = sheet.cell(row, 3).value
+        print('login', student_login)
 
         student_row = standings[
             (standings['user_name'] == str(student_name)) | (standings['login'] == str(student_login))]
         if student_row.shape[0] == 0:
             print(f'Student {student_name} is not found. Putting zeros...')
+            print(student_login)
             for ind, problem in enumerate(student_row.iloc[:, 3:-1]):
                 sheet.cell(row, contests[cur_contest] + ind).value = 0
             continue
