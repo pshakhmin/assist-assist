@@ -4,82 +4,131 @@ import os.path
 
 import click
 import pandas as pd
+import questionary
 from openpyxl import load_workbook
 
 
-def is_solved(problem_standing):
-    return 1 if '+' in str(problem_standing) else 0
+class ContestChecker:
+    def __init__(self):
+        self.standings = None
+        self.grades = None
+        self.grades_xlsx = None
+        self.contests = {}
+        self.cur_contest = ""
+        self.losers_count = 0
+        self.full_grade_count = 0
+        self.manual_check = []
 
+    def run(self):
+        self.input_fields()
+        self.work_table()
 
-def work_sheet(sheet, standings, contest):
-    contests = {}
+    def find_filepath(self, substring):
+        results = []
+        for path in os.listdir('.'):
+            if substring in path:
+                results.append(path)
+        return results
 
-    for col in range(5, sheet.max_column):
-        col_name = sheet.cell(1, col).value
-        if col_name is not None:
-            contests[col_name] = col
+    def work_sheet(self, sheet):
+        print(f'⚙️ Processing {self.cur_contest} - {sheet.title}')
 
-    cur_contest = list(contests.keys())[-1]
+        for row in range(1, sheet.max_row):
+            student_name = sheet.cell(row, 1).value
+            if student_name is None:
+                continue
+            if student_name == 'Student':
+                continue
 
-    if contest == 'last':
-        print('Contest is not specified, processing the last in the table')
+            student_login = sheet.cell(row, 3).value
 
-    if cur_contest not in contests:
-        print(list(contests))
-        print(f'Contest {cur_contest} not found (possible options:{",".join(list(contests))}), aborting..')
-        exit(-1)
+            student_row = self.standings[
+                (self.standings['user_name'] == str(student_name)) | (self.standings['login'] == str(student_login))]
 
-    print(f'Processing {cur_contest} - {sheet.title}')
+            if student_row.shape[0] == 0:
+                print(f'    ⚠️ Student {student_name} [{student_login}] is not found. Putting zeros...')
+                self.losers_count += 1
+                for ind, problem in enumerate(student_row.iloc[:, 3:-1]):
+                    sheet.cell(row, self.contests[self.cur_contest] + ind).value = 0
+                continue
 
-    for row in range(1, sheet.max_row):
-        student_name = sheet.cell(row, 1).value
-        if student_name is None:
-            continue
-        if student_name == 'Student':
-            continue
-
-        student_login = sheet.cell(row, 3).value
-        print('login', student_login)
-
-        student_row = standings[
-            (standings['user_name'] == str(student_name)) | (standings['login'] == str(student_login))]
-        if student_row.shape[0] == 0:
-            print(f'Student {student_name} is not found. Putting zeros...')
-            print(student_login)
             for ind, problem in enumerate(student_row.iloc[:, 3:-1]):
-                sheet.cell(row, contests[cur_contest] + ind).value = 0
-            continue
+                mark = int(is_solved(student_row[problem].iloc[0]))
+                if problem not in self.manual_check:
+                    sheet.cell(row, self.contests[self.cur_contest] + ind).value = mark
+                elif mark == 0:
+                    sheet.cell(row, self.contests[self.cur_contest] + ind).value = 0
+                # else:
+                    # sheet.cell(row, self.contests[self.cur_contest] + ind).value = None
 
-        for ind, problem in enumerate(student_row.iloc[:, 3:-1]):
-            sheet.cell(row, contests[cur_contest] + ind).value = is_solved(student_row[problem])
+    def input_fields(self):
+        standings_csv = questionary.select(
+            "Select the standings file",
+            choices=self.find_filepath('standings')
+        ).ask()  # returns value of selection
+
+        self.grades_xlsx = questionary.select(
+            "Select the grades file",
+            choices=self.find_filepath('xlsx')
+        ).ask()  # returns value of selection
+
+        self.grades = load_workbook(self.grades_xlsx)
+
+        first_sheet = self.grades.worksheets[1]
+        for col in range(5, first_sheet.max_column):
+            col_name = first_sheet.cell(1, col).value
+            if col_name is not None and 'Contest' in col_name:
+                self.contests[col_name] = col
+
+        self.cur_contest = questionary.select(
+            "Select the contest to check",
+            choices=list(reversed([x for x in self.contests]))
+        ).ask()
+
+        self.standings = pd.read_csv(standings_csv)
+        self.manual_check = questionary.checkbox(
+            'Select the tasks for manual check',
+            choices=self.standings.columns[3:-1]
+        ).ask()
+
+        print(f'✅ Done reading csv: {self.standings.shape[0]} participants.')
+        print(f'✅ Mean score: {self.standings["Score"].mean().round(2)}/{self.standings["Score"].max()}')
+
+    def work_table(self):
+        for sheet in self.grades.worksheets:
+            if sheet.title == 'All' or '2' not in sheet.title:
+                continue
+            self.work_sheet(sheet)
+
+        self.grades.save(self.grades_xlsx)
+        print(f'\n✅ {self.cur_contest} was checked successfully!')
+        full_grades_count = sum((self.standings['Score'] == self.standings.shape[0] - 4))
+        print(f'⚠️ {self.losers_count} students did not do their homework :(')
+        print(f'🎉 {full_grades_count} students have a 100% grade!')
 
 
-@click.command()
-@click.option("-csv", "--standings_csv", prompt=True, required=True, type=click.Path())
-@click.option("-xlsx", "--grades_xlsx", prompt=True, required=True)
-@click.option("-c", "--contest", prompt=True, required=True, default='last')
-def run(standings_csv, grades_xlsx, contest):
-    if not os.path.exists(standings_csv):
-        print(f'File not found: {standings_csv}')
-        exit(-1)
+class QuestionaryOption(click.Option):
 
-    if not os.path.exists(grades_xlsx):
-        print(f'File not found: {grades_xlsx}')
-        exit(-1)
+    def __init__(self, param_decls=None, **attrs):
+        click.Option.__init__(self, param_decls, **attrs)
+        if not isinstance(self.type, click.Choice):
+            raise Exception('ChoiceOption type arg must be click.Choice')
 
-    df = pd.read_csv(standings_csv)
+    def prompt_for_value(self, ctx):
+        val = questionary.select(self.prompt, choices=self.type.choices).unsafe_ask()
+        return val
 
-    print(f'Done reading csv: {df.shape[0]} participants.')
-    print(f'Mean score: {df["Score"].mean().round(2)}/{df["Score"].max()}')
 
-    workbook = load_workbook(grades_xlsx)
-    for sheet in workbook.worksheets:
-        if sheet.title == 'All':
-            continue
-        work_sheet(sheet, df, contest)
+def is_solved(problem_standing):
+    if not problem_standing:
+        return 0
 
-    workbook.save(grades_xlsx)
+    if str(problem_standing)[0] == '1':
+        return 1
+    else:
+        return 0
 
 
 if __name__ == '__main__':
-    run()
+    checker = ContestChecker()
+    checker.run()
