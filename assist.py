@@ -48,6 +48,7 @@ class ContestChecker:
                 | (self.standings["login"] == str(student_login))
             ]
 
+            # print(sheet.title, row)
             if student_row.shape[0] == 0:
                 print(
                     f"    ⚠️ Student {student_name} [{student_login}] is not found. Putting zeros..."
@@ -59,12 +60,12 @@ class ContestChecker:
 
             for ind, problem in enumerate(student_row.iloc[:, 3:-1]):
                 mark = int(is_solved(student_row[problem].iloc[0]))
-                if problem not in self.manual_check:
+                if problem.split("(")[0] not in self.manual_check:
                     sheet.cell(row, self.contests[self.cur_contest] + ind).value = mark
                 elif mark == 0:
                     sheet.cell(row, self.contests[self.cur_contest] + ind).value = 0
-                # else:
-                # sheet.cell(row, self.contests[self.cur_contest] + ind).value = None
+                else:
+                    continue
 
     def input_fields(self):
         standings_csv = questionary.select(
@@ -90,9 +91,16 @@ class ContestChecker:
         ).ask()
 
         self.standings = pd.read_csv(standings_csv)
-        self.manual_check = questionary.checkbox(
-            "Select the tasks for manual check", choices=self.standings.columns[3:-1]
-        ).ask()
+
+        self.req_string = questionary.text("Enter the requirements string").ask()
+
+        if self.req_string:
+            self.archive_file = questionary.select(
+                "Select the submits file",
+                choices=self.find_filepath("zip"),
+            ).ask()  # returns value of selection
+            self.checker = LLMChecker(self.req_string, self.archive_file)
+            self.manual_check = list(self.checker.requirements.keys())
 
         print(f"✅ Done reading csv: {self.standings.shape[0]} participants.")
         print(
